@@ -86,9 +86,10 @@ internal fun buildModsData(modsJson: String, baseItemsJson: String): ModsData {
         .sorted()
 
     // Filter and convert mods
-    val mods: Map<ModName, ModEntry> = rawMods.values
-        .filter { it.domain == "item" && it.generationType != "unique" && it.name.isNotEmpty() }
-        .map { raw ->
+    val mods: Map<String, ModEntry> = rawMods
+        .asSequence()
+        .filter { (id,mod) -> mod.domain == "item" && mod.generationType != "unique" && mod.name.isNotEmpty() }
+        .map { (id,raw) ->
             val resolvedItemTypes = raw.spawnWeights.asSequence()
                 .filter { it.weight > 0 }
                 .flatMap { tagToClasses[it.tag] ?: emptySet() }
@@ -99,6 +100,7 @@ internal fun buildModsData(modsJson: String, baseItemsJson: String): ModsData {
                 .toList()
 
             ModEntry(
+                id        = id,
                 name      = raw.name,
                 text      = raw.text?.let(::cleanText) ?: "",
                 groups    = raw.groups,
@@ -106,7 +108,7 @@ internal fun buildModsData(modsJson: String, baseItemsJson: String): ModsData {
             )
         }
         .filter { it.itemTypes.isNotEmpty() }
-        .associateBy { it.name }
+        .associateBy { it.id }
 
     // Group index: group id → list of mod names (only valid mods)
     val groups: Map<String, MutableList<ModName>> = buildMap {
@@ -119,20 +121,12 @@ internal fun buildModsData(modsJson: String, baseItemsJson: String): ModsData {
         }
     }
 
-    val allStrings: List<String> = (
-        itemClasses +
-        mods.map { (k,v) -> searchableModName(k, v) }
-    ).distinct()
-
     return ModsData(
         mods        = mods,
         groups      = groups,
-        itemClasses = itemClasses,
-        allStrings  = allStrings,
+        itemClasses = itemClasses
     )
 }
-
-fun searchableModName(k: ModName, v: ModEntry): String = "$k^^^^^^^^^^^^^^^^^^^${replaceRanges(v.text, '#')}"
 
 /**
  * Ensures both data files exist under [projectDir] (downloading if absent),

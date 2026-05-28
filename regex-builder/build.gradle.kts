@@ -8,7 +8,7 @@ repositories {
 }
 
 dependencies {
-    implementation(project(":solver"))
+    api(project(":solver"))
     implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit.jupiter)

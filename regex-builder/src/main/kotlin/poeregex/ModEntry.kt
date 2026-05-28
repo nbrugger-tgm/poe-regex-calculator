@@ -22,6 +22,7 @@ data class ItemTypeRef(
  * @property itemTypes Item classes this mod can roll on, derived from spawn_weights > 0.
  */
 data class ModEntry(
+    val id: String,
     val name: String,
     val text: String,
     val groups: List<String>,

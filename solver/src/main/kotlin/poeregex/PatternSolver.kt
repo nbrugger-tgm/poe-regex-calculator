@@ -1,11 +1,13 @@
 package poeregex
 
+import poeregex.PatternSolver.Searchable
+
 /**
  * Thrown when an element of [b] cannot be covered by any substring pattern without
  * also matching strings in [a] that are not in [b].
  */
-class UnresolvablePatternException(val element: String) :
-    Exception("No valid pattern exists for element '$element': every substring also matches strings outside B")
+class UnresolvablePatternException(val element: Searchable, val collisions: List<Searchable>) :
+    Exception("No valid pattern exists for element '${element.searchString}': every substring also matches strings outside B (${collisions})")
 
 /**
  * Finds the minimum list of substring patterns [C] such that:
@@ -18,5 +20,9 @@ class UnresolvablePatternException(val element: String) :
  * @throws IllegalArgumentException if [b] contains elements not present in [a].
  */
 interface PatternSolver {
-    fun solve(a: List<String>, b: List<String>): List<String>
+    interface Searchable {
+        val searchString: String
+    }
+
+    fun solve(a: List<Searchable>, b: List<Searchable>): List<String>
 }

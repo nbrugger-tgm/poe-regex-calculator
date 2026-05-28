@@ -5,17 +5,17 @@ package poeregex
  */
 class MinimumPatternSolver : PatternSolver {
 
-    override fun solve(a: List<String>, b: List<String>): List<String> {
-        val aSet = a.toSet()
-        val bSet = b.toSet()
+    override fun solve(a: List<PatternSolver.Searchable>, b: List<PatternSolver.Searchable>): List<String> {
+        val aStringSet = a.asSequence().map { it.searchString }.toSet()
+        val bStringSet = b.asSequence().map { it.searchString }.toSet()
 
-        require(bSet.all { it in aSet }) {
-            "B contains elements not present in A: ${bSet - aSet}"
+        require(bStringSet.all { it in aStringSet }) {
+            "B contains elements not present in A: ${bStringSet - aStringSet}"
         }
 
         if (b.isEmpty()) return emptyList()
 
         val candidates = buildCandidates(a, b)
-        return exactSetCover(candidates, bSet)
+        return exactSetCover(candidates.mapValues { it.value.asSequence().map { it.searchString }.toSet() }, bStringSet)
     }
 }

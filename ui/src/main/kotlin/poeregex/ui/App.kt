@@ -11,11 +11,11 @@ import eu.nitonfx.signaling.api.MapSignal
 import eu.nitonfx.signaling.api.Signal
 import poeregex.ModEntry
 import poeregex.ModsData
+import poeregex.PatternSolver.Searchable
+import poeregex.UnresolvablePatternException
 import poeregex.buildVendorRegex
 import poeregex.replaceRanges
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import kotlin.time.Duration
 import kotlin.time.measureTime
 
@@ -162,7 +162,7 @@ private fun DivContent.ModGroupList(
         }
     }.Else {
         For({ filteredGroups() }) { (groupId, groupMods) ->
-            val allGroupModNames = groupMods.map { it.name }
+            val allGroupModNames = groupMods.map { it.id }
             val headerText = {
                 replaceRanges(
                     groupMods.minByOrNull { it.name }?.text ?: "", 'X'
@@ -217,8 +217,8 @@ private fun DivContent.ModGroup(
                 For({groupMods.sortedBy { it.name }}) { mod ->
                     ModRow(
                         mod = mod,
-                        selected ={mod.name in selection.getOrDefault(viewedItemType(), emptyList())},
-                        onSelect ={toggleMod(viewedItemType(), mod.name)}
+                        selected ={mod.id in selection.getOrDefault(viewedItemType(), emptyList())},
+                        onSelect ={toggleMod(viewedItemType(), mod.id)}
                     )
                 }
             }
@@ -294,12 +294,16 @@ private fun DivContent.RegexPanel(
             ) { +"Clear" }
         }
         div(`class` = { "p-4 flex-1 overflow-y-auto" }) {
-            RegexDisplay(cx,selection, modsData)
+            ResultDisplay(cx,selection, modsData)
         }
     }
 }
 
-private fun DivContent.RegexDisplay(
+private sealed interface RegexResult {
+    data class Regex(var regex: String):RegexResult
+    data class Conflict(var conflicts: List<Searchable>):RegexResult
+}
+private fun DivContent.ResultDisplay(
     cx: Context,
     selection: MapSignal<String, List<String>>,
     modsData: ModsData
@@ -308,41 +312,59 @@ private fun DivContent.RegexDisplay(
     cx.createEffect {
         println("Active selection changed : $activeSel")
     }
-    val regex = cx.createNullSignal<String>()
+    val regex = cx.createNullSignal<RegexResult>()
     val lastRegexTime = cx.createSignal(Duration.ZERO)
+    var lastFuture = CompletableFuture.completedFuture<Void>(null)
     cx.createEffect {
         val mods = selection.filter { (k, v) -> v.isNotEmpty() }
         regex.set(null)
-        CompletableFuture.runAsync {
-            val regexAndTime =  run {
-                lateinit var regex: String
-                val time = measureTime {
-                    regex = try {
-                        buildVendorRegex(modsData, mods)
-                    } catch (e: Exception) {
-                        "Error: ${e.message}"
-                    }
+        lastFuture.cancel(true)
+        lastFuture = CompletableFuture.runAsync {
+            lastRegexTime.set(measureTime {
+                try {
+                    regex.set(RegexResult.Regex(buildVendorRegex(modsData, mods)))
+                } catch (e: UnresolvablePatternException) {
+                    regex.set(RegexResult.Conflict(e.collisions))
                 }
-                regex to time
-            }
-            lastRegexTime.set(regexAndTime.second)
-            regex.set(regexAndTime.first)
+            })
         }
     }
+    cx.cleanup {
+        lastFuture.cancel(true)
+    }
+
     If ({ activeSel.any { it.isNotEmpty() } }) {
         If({regex() == null}) {
             +"Calculating regex ..."
         }.Else {
-            pre(`class` = { "text-xs bg-gray-50 p-3 rounded border border-gray-200 whitespace-pre-wrap break-all font-mono leading-relaxed" }) {
-                +{ regex() }
-            }
-            span(`class`={"text-xs text-gray-400"}) {
-                +"Regex Calculation time: "
-                span(`class`= {"text-gray-300"}) { +{lastRegexTime().toString()} }
+            If({regex() is RegexResult.Regex}) {
+                RegexDisplay({ regex()!! as RegexResult.Regex }, { lastRegexTime() })
+            }.Else {
+                ConflictDisplay({ regex()!! as RegexResult.Conflict }, { lastRegexTime() })
             }
         }
     }.Else {
         span(`class` = { "text-gray-400 text-sm" }) { +"Select mods to generate a regex." }
     }
+}
+
+private fun DivContent.RegexDisplay(
+    regex: ()->RegexResult.Regex,
+    lastRegexTime: ()->Duration
+) {
+    pre(`class` = { "text-xs bg-gray-50 p-3 rounded border border-gray-200 whitespace-pre-wrap break-all font-mono leading-relaxed" }) {
+        +{ regex().regex }
+    }
+    span(`class` = { "text-xs text-gray-300" }) {
+        +"Regex Calculation time: "
+        span(`class` = { "text-gray-400" }) { +{ lastRegexTime().toString() } }
+    }
+}
+
+private fun DivContent.ConflictDisplay(
+    regex: ()->RegexResult.Conflict,
+    lastRegexTime: ()->Duration
+) {
+
 }
 

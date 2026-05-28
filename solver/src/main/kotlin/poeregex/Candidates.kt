@@ -1,5 +1,7 @@
 package poeregex
 
+import poeregex.PatternSolver.Searchable
+
 /**
  * Generates all non-empty substrings of [s], shortest first.
  */
@@ -20,23 +22,30 @@ internal fun substrings(s: String): Sequence<String> = sequence {
  *         deduplicated so each (pattern → coverage) entry is unique.
  * @throws UnresolvablePatternException for the first element of [b] that has no valid pattern.
  */
-internal fun buildCandidates(a: List<String>, b: List<String>): Map<String, Set<String>> {
-    val bSet = b.toSet()
-
+internal fun buildCandidates(a: List<Searchable>, b: List<Searchable>): Map<String, Set<Searchable>> {
     // pattern → set of b-elements it covers (only valid patterns are kept)
-    val candidates = mutableMapOf<String, MutableSet<String>>()
+    val candidates = mutableMapOf<String, MutableSet<Searchable>>()
+
+    val bStringSet = b.asSequence().map { it.searchString }.toSet()
 
     for (element in b) {
         var covered = false
-        for (pattern in substrings(element)) {
-            val matchesInA = a.filter { it.contains(pattern) }
-            if (matchesInA.all { it in bSet }) {
+        for (pattern in substrings(element.searchString)) {
+            val matchesInA = a.filter { it.searchString.contains(pattern) }
+            if (matchesInA.all { it.searchString in bStringSet }) {
                 candidates.getOrPut(pattern) { mutableSetOf() }
-                    .addAll(matchesInA.filter { it in bSet })
+                    .addAll(matchesInA.filter { it.searchString in bStringSet })
                 covered = true
             }
         }
-        if (!covered) throw UnresolvablePatternException(element)
+        if (!covered) {
+            val collisions = a.asSequence().filter {
+                it.searchString.contains(element.searchString)
+            }.filter {
+                !b.none { be -> be.searchString.contains(it.searchString) }
+            }.toList()
+            throw UnresolvablePatternException(element, collisions)
+        }
     }
 
     return candidates

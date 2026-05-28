@@ -16,9 +16,8 @@ typealias ItemType = String
  * @property itemClasses All distinct item_class values present in base_items.json.
  * @property allStrings  The solver's A set: itemClasses ∪ modNames ∪ modTexts.
  */
-data class ModsData(
+class ModsData(
     val mods: Map<ModName, ModEntry>,
     val groups: Map<String, List<ModName>>,
-    val itemClasses: List<String>,
-    val allStrings: List<String>,
+    val itemClasses: List<String>
 )

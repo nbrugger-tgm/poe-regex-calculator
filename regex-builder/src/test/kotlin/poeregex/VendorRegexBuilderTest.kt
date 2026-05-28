@@ -47,7 +47,7 @@ class VendorRegexBuilderTest {
 
             // Each type pattern must match the requested item type
             assertTrue(
-                typePatterns.all { p -> modsData.allStrings.any { s -> s.contains(p) && s == itemType } },
+                typePatterns.all { p -> allStrings.any { s -> s.contains(p) && s == itemType } },
                 "Type pattern in '$typeSection' must match item type '$itemType'"
             )
             // Each type pattern must NOT match any mod name or text (no false positives)
@@ -93,7 +93,7 @@ class VendorRegexBuilderTest {
             "ItemRarity" to listOf("Magpie's", "Collector's", "Hoarder's"),
         )
         val itemClasses = listOf("Ring", "Amulet", "Belt")
-        val allStrings = (itemClasses + mods.keys + mods.values.map { it.text }).distinct()
+        val allStrings = (itemClasses + mods.map { (k, v) -> searchableModName(k, v) }).distinct()
         return ModsData(mods, groups, itemClasses, allStrings)
     }
 
@@ -128,19 +128,19 @@ class VendorRegexBuilderTest {
     // ── B2 rule: all tiers selected → use texts ───────────────────────────────
 
     @Test
-    fun `all tiers selected - mod section covers all tier texts`() {
+    fun `all tiers selected - mod section covers all tier searchable strings`() {
         val data = makeModsData()
-        // Select all Strength tiers → B2 should be the texts, not the names
+        // Select all Strength tiers → every tier's searchable string must be covered by a pattern
         val result = buildVendorRegex(data, mapOf("Ring" to listOf("of the Brute", "of the Wrestler")))
         val (_, modSection) = splitLine(result.lines().first { it.isNotBlank() })
         val modPatterns = modSection.split("|")
 
-        // Every tier text must be matched by at least one mod pattern
-        val texts = listOf("+(5-8) to Strength", "+(9-12) to Strength")
-        for (text in texts) {
+        val selectedMods = listOf("of the Brute", "of the Wrestler")
+        for (modName in selectedMods) {
+            val searchable = searchableModName(modName, data.mods[modName]!!)
             assertTrue(
-                modPatterns.any { p -> text.contains(p) },
-                "Text '$text' must be matched by at least one mod pattern in '$modSection'"
+                modPatterns.any { p -> searchable.contains(p) },
+                "Mod '$modName' (searchable='$searchable') must be matched by a pattern in '$modSection'"
             )
         }
     }
@@ -155,7 +155,7 @@ class VendorRegexBuilderTest {
         for (pattern in modPatterns) {
             assertTrue(
                 data.itemClasses.none { it.contains(pattern) },
-                "Mod pattern '$pattern' must not match any item class"
+                "Mod pattern '$pattern' must not match any item class in ${data.itemClasses}"
             )
         }
     }

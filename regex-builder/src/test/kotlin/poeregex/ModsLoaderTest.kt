@@ -209,37 +209,39 @@ class ModsLoaderTest {
 
     @Test
     fun `allStrings contains all item class values`() {
-        assertTrue("Ring" in data.allStrings)
-        assertTrue("Amulet" in data.allStrings)
-        assertTrue("Helmet" in data.allStrings)
+        assertTrue("Ring" in allStrings)
+        assertTrue("Amulet" in allStrings)
+        assertTrue("Helmet" in allStrings)
     }
 
     @Test
     fun `allStrings contains all valid mod names`() {
-        assertTrue("of the Brute" in data.allStrings)
-        assertTrue("of the Wrestler" in data.allStrings)
+        // allStrings stores the combined searchable format "name^^^...^^^text"; mod names appear as prefixes
+        assertTrue(allStrings.any { "of the Brute" in it })
+        assertTrue(allStrings.any { "of the Wrestler" in it })
     }
 
     @Test
     fun `allStrings contains cleaned mod texts`() {
-        assertTrue("+(5-8) to Strength" in data.allStrings)
-        assertTrue("+(9-12) to Strength" in data.allStrings)
+        // Numeric ranges are replaced with '#' in the searchable strings
+        assertTrue(allStrings.any { replaceRanges("+(5-8) to Strength", '#') in it })
+        assertTrue(allStrings.any { replaceRanges("+(9-12) to Strength", '#') in it })
     }
 
     @Test
     fun `allStrings does not contain raw markup text`() {
-        assertTrue(data.allStrings.none { "[Strength|Strength]" in it })
+        assertTrue(allStrings.none { "[Strength|Strength]" in it })
     }
 
     @Test
     fun `allStrings contains no duplicates`() {
-        assertEquals(data.allStrings.size, data.allStrings.toSet().size)
+        assertEquals(allStrings.size, allStrings.toSet().size)
     }
 
     @Test
     fun `excluded mod names and texts are absent from allStrings`() {
-        assertFalse("of Unique Strength" in data.allStrings)
-        assertFalse("of the Monster" in data.allStrings)
-        assertFalse("Monster bonus" in data.allStrings)
+        assertFalse("of Unique Strength" in allStrings)
+        assertFalse("of the Monster" in allStrings)
+        assertFalse("Monster bonus" in allStrings)
     }
 }

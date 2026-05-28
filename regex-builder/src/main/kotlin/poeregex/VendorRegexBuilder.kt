@@ -1,10 +1,20 @@
 package poeregex
 
+import poeregex.PatternSolver.Searchable
+
 private val RANGE_RE = Regex("""\(\d+(\.\d+)?-\d+(\.\d+)?\)""")
 
 fun replaceRanges(firstModText: String, placeholder: Char): String =
     RANGE_RE.replace(firstModText, "$placeholder")
 
+class ModPattern(val mod: ModEntry) : Searchable {
+    override val searchString: String = mod.searchableModName()
+    override fun toString(): String {
+        return mod.toString()
+    }
+}
+
+data class ItemPattern(override val searchString: String) : Searchable
 
 /**
  * Builds a PoE vendor search regex string from a selection of item types and mods.
@@ -35,35 +45,19 @@ fun buildVendorRegex(
 
     val solver = MinimumPatternSolver()
 
-    val patterns = selection.entries.map { (itemType, modNames) ->
-        require(modNames.all { it in modsData.mods }) {
-            val unknown = modNames.filter { it !in modsData.mods }
-            "Unknown mod names for item type '$itemType': $unknown"
-        }
+    val typePattern = solver.solve(
+        a = modsData.allStrings,
+        b = selection.keys.map { ItemPattern(it) },
+    ).joinToString("|")
+    val b2 = buildB2(modsData, selection.entries.flatMap { it.value })
+    val modRestrictedList = allStrings(modsData.itemClasses, modsData.mods.filter {
+        it.value.itemTypes.any { it.id in selection.keys }
+    })
+    val modPattern = solver.solve(
+        a = modRestrictedList,
+        b = b2,
+    ).joinToString("|")
 
-        val typePatterns = solver.solve(
-            a = modsData.allStrings,
-            b = listOf(itemType),
-        )
-
-        val b2 = buildB2(modsData, modNames)
-        val modPatterns = solver.solve(
-            a = modsData.allStrings,
-            b = b2,
-        )
-
-        typePatterns.joinToString("|") to modPatterns.joinToString("|")
-    }
-    var typePattern = ""
-    var modPattern = ""
-    patterns.forEach { (type,mod) ->
-        if(!typePattern.isEmpty())
-            typePattern += "|"
-        if(!modPattern.isEmpty())
-            modPattern += "|"
-        typePattern += type
-        modPattern += mod
-    }
     return "\"$typePattern\" \"$modPattern\"".replace("#", "\\d+")
 }
 
@@ -74,8 +68,16 @@ fun buildVendorRegex(
  *  - All mods in the group are selected → contribute the cleaned **text** of each selected mod.
  *  - Only a subset is selected → contribute the mod **names** of the selected mods.
  */
-private fun buildB2(modsData: ModsData, modNames: List<ModName>): List<String> {
-    return modNames.map {
-        searchableModName(it, modsData.mods[it]!!)
+private fun buildB2(modsData: ModsData, modIDs: List<String>): List<Searchable> {
+    return modIDs.map {
+        ModPattern(modsData.mods[it]!!)
     }
 }
+
+fun ModEntry.searchableModName(): String = "${name}^^^^^^^^^^^^^^^^^^^^^^^^^^^^^${replaceRanges(text, '#')}".uppercase()
+    .replace("\n", "$^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
+
+val ModsData.allStrings: List<Searchable> get() = allStrings(itemClasses, mods)
+fun allStrings(itemClasses: List<String>, mods: Map<String, ModEntry>): List<Searchable> = (
+        itemClasses.map { ItemPattern(it) } + mods.map { (k, v) -> ModPattern(v) }
+        ).distinct()
