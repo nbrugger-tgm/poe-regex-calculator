@@ -1,0 +1,3 @@
+[submodule "libs/lifewire"]
+	path = libs/lifewire
+	url = https://github.com/nbrugger-tgm/lifewire
