@@ -9,15 +9,15 @@ import eu.niton.lifewire.signaling.invoke
 import eu.nitonfx.signaling.api.Context
 import eu.nitonfx.signaling.api.MapSignal
 import eu.nitonfx.signaling.api.Signal
-import poeregex.ModEntry
-import poeregex.ModsData
+import poeregex.*
 import poeregex.PatternSolver.Searchable
-import poeregex.UnresolvablePatternException
-import poeregex.buildVendorRegex
-import poeregex.replaceRanges
+import java.util.*
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import kotlin.time.Duration
 import kotlin.time.measureTime
+
 
 fun BodyContent.App(cx: Context, modsData: ModsData) = component {
     val viewedItemType = cx.createNullSignal<String?>()
@@ -49,7 +49,7 @@ private fun DivContent.ItemTypePanel(
         div(`class` = { "px-3 py-2 border-b border-gray-200" }) {
             span(`class` = { "font-semibold text-sm" }) { +"Item Types" }
         }
-        For(elements = { modsData.itemClasses.sorted() }) { itemType ->
+        For(elements = { modsData.itemClasses.keys.sorted() }) { itemType ->
             ItemTypeCard(itemType, selection, selected = { viewedItemType() == itemType }, select = {
                 viewedItemType(itemType)
             })
@@ -300,51 +300,89 @@ private fun DivContent.RegexPanel(
 }
 
 private sealed interface RegexResult {
-    data class Regex(var regex: String):RegexResult
-    data class Conflict(var conflicts: List<Searchable>):RegexResult
+    data class Regex(var regex: String): RegexResult
+    data class Conflict(val element: Searchable, val conflicts: List<Searchable>): RegexResult
 }
+
 private fun DivContent.ResultDisplay(
     cx: Context,
     selection: MapSignal<String, List<String>>,
     modsData: ModsData
 ) = component {
     val activeSel = selection.keySetSignal().map { selection[it]?:listOf() }
-    cx.createEffect {
-        println("Active selection changed : $activeSel")
-    }
     val regex = cx.createNullSignal<RegexResult>()
     val lastRegexTime = cx.createSignal(Duration.ZERO)
-    var lastFuture = CompletableFuture.completedFuture<Void>(null)
+    val candidatesProgress = cx.createSignal(0f)
+    val reductionProgress = cx.createSignal(0f)
     cx.createEffect {
         val mods = selection.filter { (k, v) -> v.isNotEmpty() }
-        regex.set(null)
-        lastFuture.cancel(true)
-        lastFuture = CompletableFuture.runAsync {
+        if(mods.isEmpty()) return@createEffect
+        val service = Executors.newFixedThreadPool(1)
+        cx.cleanup {
+            service.shutdownNow()
+        }
+        service.submit<Void> {
+            regex.set(null)
+            candidatesProgress.set(0f)
+            reductionProgress.set(0f)
             lastRegexTime.set(measureTime {
                 try {
-                    regex.set(RegexResult.Regex(buildVendorRegex(modsData, mods)))
+                    regex.set(RegexResult.Regex(buildVendorRegex(
+                        modsData, mods,
+                        candidatesProgressCallback = { progress, total ->
+                            candidatesProgress.set(progress.toFloat() / total.coerceAtLeast(1))
+                        },
+                        reductionProgressCallback = { progress, total ->
+                            reductionProgress.set(progress.toFloat() / total.coerceAtLeast(1))
+                        },
+                    ).also {
+                        println("Regex calculated:$it")
+                    }))
                 } catch (e: UnresolvablePatternException) {
-                    regex.set(RegexResult.Conflict(e.collisions))
+                    regex.set(RegexResult.Conflict(e.element, e.collisions))
                 }
             })
+            null
         }
-    }
-    cx.cleanup {
-        lastFuture.cancel(true)
     }
 
     If ({ activeSel.any { it.isNotEmpty() } }) {
         If({regex() == null}) {
-            +"Calculating regex ..."
+            CalculatingDisplay({ candidatesProgress() }, { reductionProgress() })
         }.Else {
             If({regex() is RegexResult.Regex}) {
                 RegexDisplay({ regex()!! as RegexResult.Regex }, { lastRegexTime() })
             }.Else {
-                ConflictDisplay({ regex()!! as RegexResult.Conflict }, { lastRegexTime() })
+                ConflictDisplay({ regex()!! as RegexResult.Conflict }, { lastRegexTime() }, selection)
             }
         }
     }.Else {
         span(`class` = { "text-gray-400 text-sm" }) { +"Select mods to generate a regex." }
+    }
+}
+
+private fun DivContent.CalculatingDisplay(
+    candidatesProgress: () -> Float,
+    reductionProgress: () -> Float,
+) = component {
+    div(`class` = { "space-y-3" }) {
+        span(`class` = { "text-sm text-gray-500" }) { +"Calculating regex ..." }
+        ProgressBar("Candidates", candidatesProgress)
+        ProgressBar("Reduction", reductionProgress)
+    }
+}
+
+private fun DivContent.ProgressBar(label: String, progress: () -> Float) {
+    val percentage = { "%,.1f".format(Locale.ENGLISH, progress() * 100) }
+    div(`class` = { "space-y-1" }) {
+        div(`class` = { "flex justify-between text-xs text-gray-400" }) {
+            span { +label }
+            span { +{ "${percentage()}%" } }
+        }
+        div(`class` = { "w-full bg-gray-100 rounded-full h-2" }) {
+            div(`class` = { "bg-blue-400 h-2 rounded-full transition-all" },
+                style = { "width: ${percentage()}%" }) {}
+        }
     }
 }
 
@@ -362,9 +400,73 @@ private fun DivContent.RegexDisplay(
 }
 
 private fun DivContent.ConflictDisplay(
-    regex: ()->RegexResult.Conflict,
-    lastRegexTime: ()->Duration
-) {
+    conflict: ()->RegexResult.Conflict,
+    lastRegexTime: ()->Duration,
+    selection: MapSignal<String, List<String>>,
+) = component {
 
+    // Add to all currently-selected item types where this mod can roll;
+    // fall back to all of the mod's item types if none overlap.
+    fun addConflictingMod(mod: ModEntry) {
+        val relevantTypes = selection.keys
+            .filter { itemType -> mod.itemTypes.any { it.id == itemType } }
+            .ifEmpty { mod.itemTypes.map { it.id } }
+        relevantTypes.forEach { itemType ->
+            val current = selection.getOrDefault(itemType, emptyList())
+            if (mod.id !in current) selection[itemType] = current + mod.id
+        }
+    }
+
+    div(`class` = { "space-y-3" }) {
+        // Failure message
+        p(`class` = { "text-sm font-medium text-red-700" }) {
+            +{
+                val el = conflict().element
+                val label = if (el is ModPattern) "\"${el.mod.name}\"" else "\"${el.searchString}\""
+                "$label cannot be matched without also matching:"
+            }
+        }
+        span(`class` = { "text-xs text-gray-400" }) {
+            +"(You can click conflicting mods to also select them)"
+        }
+
+        div(`class` = { "space-y-1" }) {
+            For({ conflict().conflicts }) { conflict ->
+                when (conflict) {
+                    is ModPattern -> {
+                        For({conflict.mod.itemTypes.filter { selection[it.id]?.isNotEmpty()?:false }}) { item ->
+                            val mod = conflict.mod
+                            div(
+                                `class` = { "flex flex-row cursor-pointer text-sm rounded-md border bg-red-50 border-red-200 text-red-700 hover:bg-red-100" },
+                                onClick = {addConflictingMod(mod)},
+                            ) {
+                                div(`class` ={"border-r py-1 px-2 bg-orange-50 hover:bg-red-50 rounded-l-md"}) {
+                                    +item.name
+                                }
+                                div(`class` ={"py-1 px-2"}) {
+                                    +{ "${mod.name}  — ${mod.text}" }
+                                }
+                            }
+                        }
+                    }
+                    is ItemPattern -> {
+                        div(`class` = { "px-2 py-1 text-xs rounded border bg-gray-50 border-gray-200 text-gray-500" }) {
+                            +{ conflict.searchString }
+                        }
+                    }
+                    else -> {
+                        div(`class` = { "px-2 py-1 text-xs text-gray-400" }) {
+                            +{ conflict.searchString }
+                        }
+                    }
+                }
+            }
+        }
+
+        span(`class` = { "text-xs text-gray-400" }) {
+            +"Calculation time: "
+            span(`class` = { "text-gray-300" }) { +{ lastRegexTime().toString() } }
+        }
+    }
 }
 

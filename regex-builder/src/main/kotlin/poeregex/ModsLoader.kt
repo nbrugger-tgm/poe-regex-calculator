@@ -22,11 +22,16 @@ private data class RawMod(
     @SerialName("generation_type") val generationType: String,
     val domain: String,
     @SerialName("spawn_weights") val spawnWeights: List<RawSpawnWeight> = emptyList(),
+    @SerialName("required_level") val requiredLevel: Int,
+    @SerialName("is_essence_only") val essenceMod: Boolean,
 )
 
 @Serializable
-private data class RawBaseItem(
+data class RawBaseItem(
     @SerialName("item_class") val itemClass: String,
+    @SerialName("drop_level") val dropLevel: Int,
+    @SerialName("release_state") val releaseState: String,
+    val name: String,
     val tags: List<String> = emptyList(),
 )
 
@@ -49,11 +54,15 @@ private val JEWELLERY_CLASSES = setOf("Amulet", "Belt", "Ring")
 
 private val RELEVANT_ITEM_CLASSES = WEAPON_CLASSES + ARMOUR_CLASSES + JEWELLERY_CLASSES
 
+private val EXCLUDED_BASES = setOf("Ring")
+
+private val MAXIMUM_LEVEL = 64
+
 private val MARKUP_RE = Regex("""\[(\w*)(\|([\w ]*))?\]""")
 
 /** Resolves [display|link] markup to the display part. */
 internal fun cleanText(raw: String): String = MARKUP_RE.replace(raw) {
-    it.groupValues[3].ifEmpty {it.groupValues[1]}
+    it.groupValues[3].ifEmpty { it.groupValues[1] }
 }
 
 // ── core parsing logic (internal, testable without I/O) ───────────────────────
@@ -65,7 +74,7 @@ private val json = Json { ignoreUnknownKeys = true }
  * Exposed as `internal` so tests can call it directly without touching the file system.
  */
 internal fun buildModsData(modsJson: String, baseItemsJson: String): ModsData {
-    val rawMods      = json.decodeFromString<Map<String, RawMod>>(modsJson)
+    val rawMods = json.decodeFromString<Map<String, RawMod>>(modsJson)
     val rawBaseItems = json.decodeFromString<Map<String, RawBaseItem>>(baseItemsJson)
 
     // Build tag → set<item_class> from base_items
@@ -78,32 +87,39 @@ internal fun buildModsData(modsJson: String, baseItemsJson: String): ModsData {
             }
         }
     }
+    val classesToBases = rawBaseItems.values
+        .filter { it.itemClass in RELEVANT_ITEM_CLASSES }
+        .filter { it.name !in EXCLUDED_BASES }
+        .filter { it.dropLevel <= MAXIMUM_LEVEL }
+        .filter { it.releaseState == "released" }
+        .groupBy { it.itemClass }
 
-    val itemClasses: List<String> = rawBaseItems.values
-        .map { it.itemClass }
-        .filter { it in RELEVANT_ITEM_CLASSES }
-        .distinct()
-        .sorted()
 
     // Filter and convert mods
     val mods: Map<String, ModEntry> = rawMods
         .asSequence()
-        .filter { (id,mod) -> mod.domain == "item" && mod.generationType != "unique" && mod.name.isNotEmpty() }
-        .map { (id,raw) ->
+        .filter { (id, mod) ->
+            mod.domain == "item" &&
+                    mod.generationType != "unique" &&
+                    mod.name.isNotEmpty() &&
+                    mod.requiredLevel <= MAXIMUM_LEVEL &&
+                    !mod.essenceMod
+        }
+        .map { (id, raw) ->
             val resolvedItemTypes = raw.spawnWeights.asSequence()
                 .filter { it.weight > 0 }
                 .flatMap { tagToClasses[it.tag] ?: emptySet() }
-                .filter{ it in RELEVANT_ITEM_CLASSES }
+                .filter { it in RELEVANT_ITEM_CLASSES }
                 .distinct()
                 .sorted()
                 .map { cls -> ItemTypeRef(id = cls, name = cls) }
                 .toList()
 
             ModEntry(
-                id        = id,
-                name      = raw.name,
-                text      = raw.text?.let(::cleanText) ?: "",
-                groups    = raw.groups,
+                id = id,
+                name = raw.name,
+                text = raw.text?.let(::cleanText) ?: "",
+                groups = raw.groups,
                 itemTypes = resolvedItemTypes,
             )
         }
@@ -122,9 +138,9 @@ internal fun buildModsData(modsJson: String, baseItemsJson: String): ModsData {
     }
 
     return ModsData(
-        mods        = mods,
-        groups      = groups,
-        itemClasses = itemClasses
+        mods = mods,
+        groups = groups,
+        itemClasses = classesToBases
     )
 }
 

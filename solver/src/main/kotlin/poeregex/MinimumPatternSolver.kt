@@ -5,7 +5,10 @@ package poeregex
  */
 class MinimumPatternSolver : PatternSolver {
 
-    override fun solve(a: List<PatternSolver.Searchable>, b: List<PatternSolver.Searchable>): List<String> {
+    override fun solve(a: List<PatternSolver.Searchable>, b: List<PatternSolver.Searchable>,
+                       candidatesProgressCallback: ((Int,Int)->Unit)?,
+                       reductionProgressCallback: ((Int,Int)->Unit)?
+    ): List<String> {
         val aStringSet = a.asSequence().map { it.searchString }.toSet()
         val bStringSet = b.asSequence().map { it.searchString }.toSet()
 
@@ -15,7 +18,7 @@ class MinimumPatternSolver : PatternSolver {
 
         if (b.isEmpty()) return emptyList()
 
-        val candidates = buildCandidates(a, b)
-        return exactSetCover(candidates.mapValues { it.value.asSequence().map { it.searchString }.toSet() }, bStringSet)
+        val candidates = buildCandidates(a, b, candidatesProgressCallback)
+        return exactSetCover(candidates.mapValues { it.value.asSequence().map { it.searchString }.toSet() }, bStringSet, reductionProgressCallback)
     }
 }

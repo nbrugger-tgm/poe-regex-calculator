@@ -14,7 +14,11 @@ class ModPattern(val mod: ModEntry) : Searchable {
     }
 }
 
-data class ItemPattern(override val searchString: String) : Searchable
+class ItemPattern(itemName: String) : Searchable {
+    override val searchString: String = itemName.uppercase()
+}
+
+val msLimit = 250
 
 /**
  * Builds a PoE vendor search regex string from a selection of item types and mods.
@@ -40,22 +44,61 @@ data class ItemPattern(override val searchString: String) : Searchable
 fun buildVendorRegex(
     modsData: ModsData,
     selection: Map<ItemType, List<ModName>>,
+    candidatesProgressCallback: ((Int, Int) -> Unit)? = null,
+    reductionProgressCallback: ((Int, Int) -> Unit)? = null,
 ): String {
     if (selection.isEmpty()) return ""
 
     val solver = MinimumPatternSolver()
-
+    val typeRestrictedList =
+        allStrings(modsData.itemClasses.flatMap { it.value }.map { it.name }, modsData.mods.filter {
+            it.value.itemTypes.any { it.id !in selection.keys }
+        })
+    val baseItemsToFind = selection.keys.flatMap { it: ItemType -> modsData.itemClasses[it] ?: error("FUCK") }
+        .map { ItemPattern(it.name) }
+    var lastUpdate = System.currentTimeMillis()
     val typePattern = solver.solve(
-        a = modsData.allStrings,
-        b = selection.keys.map { ItemPattern(it) },
+        a = typeRestrictedList,
+        b = baseItemsToFind,
+        candidatesProgressCallback = { progress, total ->
+            if (progress == total || System.currentTimeMillis()-lastUpdate>=msLimit) {
+                println("Type candidate progress $progress/$total")
+                lastUpdate = System.currentTimeMillis()
+                candidatesProgressCallback?.invoke(progress,total)
+            }
+        },
+        reductionProgressCallback = { progress, total ->
+            if (progress == total || System.currentTimeMillis()-lastUpdate>=msLimit) {
+                println("Type reduction progress $progress/$total")
+                lastUpdate = System.currentTimeMillis()
+                reductionProgressCallback?.invoke(progress,total)
+            }
+        }
     ).joinToString("|")
+    println("Type pattern : $typePattern")
     val b2 = buildB2(modsData, selection.entries.flatMap { it.value })
-    val modRestrictedList = allStrings(modsData.itemClasses, modsData.mods.filter {
+    val modRestrictedList = allStrings(modsData.itemClasses.flatMap { it.value }.map { it.name }, modsData.mods.filter {
         it.value.itemTypes.any { it.id in selection.keys }
     })
+    candidatesProgressCallback?.invoke(0,1)
+    reductionProgressCallback?.invoke(0,1)
     val modPattern = solver.solve(
         a = modRestrictedList,
         b = b2,
+        candidatesProgressCallback = { progress, total ->
+            if (progress == total || System.currentTimeMillis()-lastUpdate>=msLimit) {
+                println("Mod candidate progress $progress/$total")
+                lastUpdate = System.currentTimeMillis()
+                candidatesProgressCallback?.invoke(progress,total)
+            }
+        },
+        reductionProgressCallback = { progress, total ->
+            if (progress == total || System.currentTimeMillis()-lastUpdate>=msLimit) {
+                println("Mod reduction progress $progress/$total")
+                lastUpdate = System.currentTimeMillis()
+                reductionProgressCallback?.invoke(progress,total)
+            }
+        }
     ).joinToString("|")
 
     return "\"$typePattern\" \"$modPattern\"".replace("#", "\\d+")
@@ -75,9 +118,9 @@ private fun buildB2(modsData: ModsData, modIDs: List<String>): List<Searchable> 
 }
 
 fun ModEntry.searchableModName(): String = "${name}^^^^^^^^^^^^^^^^^^^^^^^^^^^^^${replaceRanges(text, '#')}".uppercase()
-    .replace("\n", "$^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
+    .replace("\n", "$^^^^^^^^^^^^^^^^^^^^^^^^^^^^") + "$"
 
-val ModsData.allStrings: List<Searchable> get() = allStrings(itemClasses, mods)
+val ModsData.allStrings: List<Searchable> get() = allStrings(itemClasses.flatMap { it.value }.map { it.name }, mods)
 fun allStrings(itemClasses: List<String>, mods: Map<String, ModEntry>): List<Searchable> = (
         itemClasses.map { ItemPattern(it) } + mods.map { (k, v) -> ModPattern(v) }
         ).distinct()

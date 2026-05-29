@@ -24,5 +24,7 @@ interface PatternSolver {
         val searchString: String
     }
 
-    fun solve(a: List<Searchable>, b: List<Searchable>): List<String>
+    fun solve(a: List<Searchable>, b: List<Searchable>,
+              candidatesProgressCallback: ((Int,Int)->Unit)? = null,
+              reductionProgressCallback: ((Int,Int)->Unit)? = null): List<String>
 }

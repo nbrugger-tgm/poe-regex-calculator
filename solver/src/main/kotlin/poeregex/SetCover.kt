@@ -21,6 +21,7 @@ package poeregex
 internal fun exactSetCover(
     candidates: Map<String, Set<String>>,
     universe: Set<String>,
+    progressCallback: ((Int, Int) -> Unit)? = null,
 ): List<String> {
     if (universe.isEmpty()) return emptyList()
 
@@ -35,7 +36,11 @@ internal fun exactSetCover(
 
     var best = greedySolution.toMutableList()
 
+    val universeSize = universe.size
+
     fun dfs(uncovered: Set<String>, chosen: List<String>) {
+        progressCallback?.invoke(universeSize - uncovered.size, universeSize)
+
         if (uncovered.isEmpty()) {
             if (chosen.size < best.size) best = chosen.toMutableList()
             return
@@ -55,6 +60,7 @@ internal fun exactSetCover(
     }
 
     dfs(universe, emptyList())
+    progressCallback?.invoke(universeSize, universeSize)
     return best
 }
 

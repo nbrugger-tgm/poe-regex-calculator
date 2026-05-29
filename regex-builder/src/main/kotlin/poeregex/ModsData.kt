@@ -19,5 +19,5 @@ typealias ItemType = String
 class ModsData(
     val mods: Map<ModName, ModEntry>,
     val groups: Map<String, List<ModName>>,
-    val itemClasses: List<String>
+    val itemClasses: Map<String, List<RawBaseItem>>
 )

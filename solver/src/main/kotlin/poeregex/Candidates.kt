@@ -22,12 +22,18 @@ internal fun substrings(s: String): Sequence<String> = sequence {
  *         deduplicated so each (pattern → coverage) entry is unique.
  * @throws UnresolvablePatternException for the first element of [b] that has no valid pattern.
  */
-internal fun buildCandidates(a: List<Searchable>, b: List<Searchable>): Map<String, Set<Searchable>> {
+internal fun buildCandidates(a: List<Searchable>, b: List<Searchable>, progressCallback: ((Int, Int)-> Unit)?): Map<String, Set<Searchable>> {
     // pattern → set of b-elements it covers (only valid patterns are kept)
     val candidates = mutableMapOf<String, MutableSet<Searchable>>()
 
     val bStringSet = b.asSequence().map { it.searchString }.toSet()
-
+    val total = if(progressCallback != null) {
+        b.sumOf {
+            val n = it.searchString.length
+            (n * (n + 1)) / 2
+        }
+    } else 0
+    var progress = 0
     for (element in b) {
         var covered = false
         for (pattern in substrings(element.searchString)) {
@@ -37,12 +43,15 @@ internal fun buildCandidates(a: List<Searchable>, b: List<Searchable>): Map<Stri
                     .addAll(matchesInA.filter { it.searchString in bStringSet })
                 covered = true
             }
+            if(progressCallback != null) {
+                progressCallback(++progress, total)
+            }
         }
         if (!covered) {
             val collisions = a.asSequence().filter {
                 it.searchString.contains(element.searchString)
             }.filter {
-                !b.none { be -> be.searchString.contains(it.searchString) }
+                b.none { be -> be.searchString.contains(it.searchString) }
             }.toList()
             throw UnresolvablePatternException(element, collisions)
         }
