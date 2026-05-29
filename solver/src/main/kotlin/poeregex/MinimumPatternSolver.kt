@@ -19,6 +19,6 @@ class MinimumPatternSolver : PatternSolver {
         if (b.isEmpty()) return emptyList()
 
         val candidates = buildCandidates(a, b, candidatesProgressCallback)
-        return exactSetCover(candidates.mapValues { it.value.asSequence().map { it.searchString }.toSet() }, bStringSet, reductionProgressCallback)
+        return exactSetCover(candidates.mapValues { it.value.asSequence().map { it.searchString }.toSet() }, bStringSet, reductionProgressCallback).toList()
     }
 }

@@ -22,8 +22,8 @@ internal fun exactSetCover(
     candidates: Map<String, Set<String>>,
     universe: Set<String>,
     progressCallback: ((Int, Int) -> Unit)? = null,
-): List<String> {
-    if (universe.isEmpty()) return emptyList()
+): Set<String> {
+    if (universe.isEmpty()) return emptySet()
 
     // Sort candidates: prefer those covering more elements (better branching order),
     // break ties by shorter pattern (more useful to the caller).
@@ -34,32 +34,52 @@ internal fun exactSetCover(
     // Greedy upper bound to seed the search.
     val greedySolution = greedy(sortedCandidates, universe)
 
-    var best = greedySolution.toMutableList()
+    var best = greedySolution
 
     val universeSize = universe.size
 
-    fun dfs(uncovered: Set<String>, chosen: List<String>) {
+    var callCount = 0
+
+    fun dfs(uncovered: Set<String>, chosen: Set<String>) {
+        if(callCount++ >= 1000) {
+            callCount = 0
+            if(Thread.interrupted()) throw InterruptedException()
+        }
         progressCallback?.invoke(universeSize - uncovered.size, universeSize)
 
         if (uncovered.isEmpty()) {
-            if (chosen.size < best.size) best = chosen.toMutableList()
+            if (chosen.size < best.size) best = chosen
             return
         }
         // Pruning: lower bound
-        val maxCoverage = sortedCandidates.maxOfOrNull { (_, cov) -> (cov intersect uncovered).size } ?: 0
+        val maxCoverage = sortedCandidates.fold(0) { acc, (_, cov) ->
+            if(acc > cov.size) acc
+            else {
+                val intersection = cov.count { uncovered.contains(it) }
+                maxOf(acc, intersection)
+            }
+        }
         if (maxCoverage == 0) return  // no remaining candidate covers anything
         val lowerBound = (uncovered.size + maxCoverage - 1) / maxCoverage
         if (chosen.size + lowerBound >= best.size) return
 
         // Branch on patterns that cover the first uncovered element.
         val pivot = uncovered.first()
+        val newUncovered = mutableSetOf<String>()
+        val newChosen = mutableSetOf<String>()
         for ((pattern, coverage) in sortedCandidates) {
             if (pivot !in coverage) continue
-            dfs(uncovered - coverage, chosen + pattern)
+            newUncovered.clear()
+            uncovered.filterNotTo(newUncovered) { it in coverage }
+
+            newChosen.clear()
+            newChosen.addAll(chosen)
+            newChosen.add(pattern)
+            dfs(newUncovered, newChosen)
         }
     }
 
-    dfs(universe, emptyList())
+    dfs(universe, emptySet())
     progressCallback?.invoke(universeSize, universeSize)
     return best
 }
@@ -68,9 +88,9 @@ internal fun exactSetCover(
 private fun greedy(
     candidates: List<Pair<String, Set<String>>>,
     universe: Set<String>,
-): List<String> {
+): Set<String> {
     val uncovered = universe.toMutableSet()
-    val chosen = mutableListOf<String>()
+    val chosen = mutableSetOf<String>()
     while (uncovered.isNotEmpty()) {
         val (pattern, coverage) = candidates.maxByOrNull { (_, cov) -> (cov intersect uncovered).size }
             ?: break

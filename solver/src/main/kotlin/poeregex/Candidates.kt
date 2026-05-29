@@ -36,6 +36,7 @@ internal fun buildCandidates(a: List<Searchable>, b: List<Searchable>, progressC
     var progress = 0
     for (element in b) {
         var covered = false
+        if(Thread.interrupted()) throw InterruptedException()
         for (pattern in substrings(element.searchString)) {
             val matchesInA = a.filter { it.searchString.contains(pattern) }
             if (matchesInA.all { it.searchString in bStringSet }) {

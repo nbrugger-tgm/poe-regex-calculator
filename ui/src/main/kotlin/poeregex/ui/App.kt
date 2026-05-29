@@ -12,9 +12,6 @@ import eu.nitonfx.signaling.api.Signal
 import poeregex.*
 import poeregex.PatternSolver.Searchable
 import java.util.*
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.Executors
-import java.util.concurrent.Future
 import kotlin.time.Duration
 import kotlin.time.measureTime
 
@@ -317,11 +314,7 @@ private fun DivContent.ResultDisplay(
     cx.createEffect {
         val mods = selection.filter { (k, v) -> v.isNotEmpty() }
         if(mods.isEmpty()) return@createEffect
-        val service = Executors.newFixedThreadPool(1)
-        cx.cleanup {
-            service.shutdownNow()
-        }
-        service.submit<Void> {
+        val thread = Thread.startVirtualThread {
             regex.set(null)
             candidatesProgress.set(0f)
             reductionProgress.set(0f)
@@ -343,6 +336,9 @@ private fun DivContent.ResultDisplay(
                 }
             })
             null
+        }
+        cx.cleanup {
+            thread.interrupt()
         }
     }
 

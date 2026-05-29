@@ -3,6 +3,7 @@ package poeregex
 import poeregex.PatternSolver.Searchable
 
 private val RANGE_RE = Regex("""\(\d+(\.\d+)?-\d+(\.\d+)?\)""")
+private val RARITIES = setOf("normal","rare","magic","unique")
 
 fun replaceRanges(firstModText: String, placeholder: Char): String =
     RANGE_RE.replace(firstModText, "$placeholder")
@@ -14,8 +15,17 @@ class ModPattern(val mod: ModEntry) : Searchable {
     }
 }
 
-class ItemPattern(itemName: String) : Searchable {
+class ItemPattern private constructor(itemName: String) : Searchable {
     override val searchString: String = itemName.uppercase()
+
+    companion object {
+        fun ofItemClass(itemClass: String): ItemPattern = ItemPattern("item class: $itemClass")
+        fun ofItemBase(base: RawBaseItem) = ItemPattern(base.name)
+        fun ofRarity(rarity: String) = ItemPattern("rarity: $rarity")
+        fun baseStat(it: String) = ItemPattern("$it: #")
+        fun damageStat(uppercase: String) = ItemPattern("$uppercase damage: #-#")
+        fun ofRequirement() = ItemPattern("requires: #")
+    }
 }
 
 val msLimit = 250
@@ -50,16 +60,18 @@ fun buildVendorRegex(
     if (selection.isEmpty()) return ""
 
     val solver = MinimumPatternSolver()
-    val typeRestrictedList =
-        allStrings(modsData.itemClasses.flatMap { it.value }.map { it.name }, modsData.mods.filter {
+    val typeRestrictedList = allStrings(
+        modsData.itemClasses.mapValues { (itemClass, bases) -> if(selection.containsKey(itemClass)) listOf() else bases },
+        modsData.mods.filter {
             it.value.itemTypes.any { it.id !in selection.keys }
-        })
-    val baseItemsToFind = selection.keys.flatMap { it: ItemType -> modsData.itemClasses[it] ?: error("FUCK") }
-        .map { ItemPattern(it.name) }
+        }
+    )
+    val itemClassesToFind = selection.keys.map { ItemPattern.ofItemClass(it) }
+
     var lastUpdate = System.currentTimeMillis()
     val typePattern = solver.solve(
         a = typeRestrictedList,
-        b = baseItemsToFind,
+        b = itemClassesToFind,
         candidatesProgressCallback = { progress, total ->
             if (progress == total || System.currentTimeMillis()-lastUpdate>=msLimit) {
                 println("Type candidate progress $progress/$total")
@@ -77,7 +89,7 @@ fun buildVendorRegex(
     ).joinToString("|")
     println("Type pattern : $typePattern")
     val b2 = buildB2(modsData, selection.entries.flatMap { it.value })
-    val modRestrictedList = allStrings(modsData.itemClasses.flatMap { it.value }.map { it.name }, modsData.mods.filter {
+    val modRestrictedList = allStrings(modsData.itemClasses.filterKeys { !selection.containsKey(it) }, modsData.mods.filter {
         it.value.itemTypes.any { it.id in selection.keys }
     })
     candidatesProgressCallback?.invoke(0,1)
@@ -117,10 +129,23 @@ private fun buildB2(modsData: ModsData, modIDs: List<String>): List<Searchable> 
     }
 }
 
-fun ModEntry.searchableModName(): String = "${name}^^^^^^^^^^^^^^^^^^^^^^^^^^^^^${replaceRanges(text, '#')}".uppercase()
-    .replace("\n", "$^^^^^^^^^^^^^^^^^^^^^^^^^^^^") + "$"
+fun ModEntry.searchableModName(): String = "^"+replaceRanges(text, '#').uppercase()
+    .replace("\n", "$^")
+    .replace("+", "\\+")
+    .replace(".", "\\.") + "$"
 
-val ModsData.allStrings: List<Searchable> get() = allStrings(itemClasses.flatMap { it.value }.map { it.name }, mods)
-fun allStrings(itemClasses: List<String>, mods: Map<String, ModEntry>): List<Searchable> = (
-        itemClasses.map { ItemPattern(it) } + mods.map { (k, v) -> ModPattern(v) }
-        ).distinct()
+fun String.searchable(): String = "^"+ uppercase().replace("\n", "$^")
+    .replace("+", "\\+")
+    .replace(".", "\\.") + "$"
+
+val ModsData.allStrings: List<Searchable> get() = allStrings(itemClasses, mods)
+fun allStrings(itemClasses: Map<String, List<RawBaseItem>>, mods: Map<String, ModEntry>): List<Searchable> = (
+        itemClasses.flatMap { (itemClass, bases) ->
+            bases.map{ ItemPattern.ofItemBase(it) } + ItemPattern.ofItemClass(itemClass)
+        } + mods.map { (k, v) -> ModPattern(v) } +
+                RARITIES.map { ItemPattern.ofRarity(it.uppercase()) } +
+                setOf("Armour", "Energy shield","Evasion").map { ItemPattern.baseStat(it) } +
+                setOf("Physical", "Fire","Cold","Lightning","Chaos").map { ItemPattern.damageStat(it) } +
+                ItemPattern.ofRequirement()
+).distinct()
+
