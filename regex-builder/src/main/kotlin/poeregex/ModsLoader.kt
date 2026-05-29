@@ -42,7 +42,7 @@ private val WEAPON_CLASSES = setOf(
     "One Hand Axe", "One Hand Mace", "One Hand Sword",
     "Sceptre", "Spear", "Staff",
     "Two Hand Axe", "Two Hand Mace", "Two Hand Sword",
-    "Wand", "Warstaff",
+    "Wand", "Warstaff", "Talisman"
 )
 
 private val ARMOUR_CLASSES = setOf(
