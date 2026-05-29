@@ -9,16 +9,38 @@ import eu.niton.lifewire.signaling.invoke
 import eu.nitonfx.signaling.api.Context
 import eu.nitonfx.signaling.api.MapSignal
 import eu.nitonfx.signaling.api.Signal
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.modules.serializersModuleOf
 import poeregex.*
 import poeregex.PatternSolver.Searchable
+import java.nio.file.Paths
 import java.util.*
+import kotlin.io.path.createFile
+import kotlin.io.path.exists
+import kotlin.io.path.readText
+import kotlin.io.path.writeText
 import kotlin.time.Duration
 import kotlin.time.measureTime
 
 
+private val settings = Paths.get("settings.json")
+
 fun BodyContent.App(cx: Context, modsData: ModsData) = component {
     val viewedItemType = cx.createNullSignal<String?>()
-    val selection = cx.createMapSignal<String, List<String>>()
+    val selection = cx.createSignal(if(settings.exists())
+        Json.decodeFromString<Map<String, List<String>>>(settings.readText())
+        else mapOf()
+    )
+
+    cx.createEffect {
+        if(!settings.exists()) settings.createFile()
+        val clonedMap = mutableMapOf<String,List<String>>()
+        clonedMap.putAll(selection)
+        settings.writeText(Json.encodeToString(clonedMap))
+    }
 
     fun toggleMod(itemType: String, modName: String) {
         val current = selection.getOrDefault(itemType, emptyList())
