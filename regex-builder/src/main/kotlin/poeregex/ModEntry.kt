@@ -27,4 +27,5 @@ data class ModEntry(
     val text: String,
     val groups: List<String>,
     val itemTypes: List<ItemTypeRef>,
+    val itemBases: List<ItemTypeRef>,
 )

@@ -7,17 +7,16 @@ import eu.niton.lifewire.ktx.component
 import eu.niton.lifewire.ktx.tags.*
 import eu.niton.lifewire.signaling.invoke
 import eu.nitonfx.signaling.api.Context
+import eu.nitonfx.signaling.api.ListSignal
 import eu.nitonfx.signaling.api.MapSignal
 import eu.nitonfx.signaling.api.Signal
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.builtins.MapSerializer
-import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.modules.serializersModuleOf
 import poeregex.*
 import poeregex.PatternSolver.Searchable
+import poeregex.ui.RegexType.SelectionBasis.ITEM_CLASS
 import java.nio.file.Paths
 import java.util.*
+import java.util.function.Supplier
 import kotlin.io.path.createFile
 import kotlin.io.path.exists
 import kotlin.io.path.readText
@@ -28,16 +27,20 @@ import kotlin.time.measureTime
 
 private val settings = Paths.get("settings.json")
 
-fun BodyContent.App(cx: Context, modsData: ModsData) = component {
+fun BodyContent.App(cx: Context, gameData: GameData) = component {
     val viewedItemType = cx.createNullSignal<String?>()
-    val selection = cx.createSignal(if(settings.exists())
-        Json.decodeFromString<Map<String, List<String>>>(settings.readText())
+    val regexType = cx.createSignal(CAMPAIGN_VENDOR_CONFIG)
+    val modsData = cx.createMemo {
+        regexType()?.let { gameData.filter(it.itemFilter, it.modFilter) }?: ModsData(mapOf(),mapOf(),mapOf())
+    }
+    val selection = cx.createSignal(
+        if (settings.exists()) Json.decodeFromString<Map<String, List<String>>>(settings.readText())
         else mapOf()
     )
 
     cx.createEffect {
-        if(!settings.exists()) settings.createFile()
-        val clonedMap = mutableMapOf<String,List<String>>()
+        if (!settings.exists()) settings.createFile()
+        val clonedMap = mutableMapOf<String, List<String>>()
         clonedMap.putAll(selection)
         settings.writeText(Json.encodeToString(clonedMap))
     }
@@ -50,28 +53,103 @@ fun BodyContent.App(cx: Context, modsData: ModsData) = component {
 
     script(src = { "https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" }) {}
 
-    div(`class` = { "flex h-screen font-sans text-gray-800" }) {
-        ItemTypePanel(modsData, viewedItemType, selection)
-        ModPanel(cx, modsData, viewedItemType, selection, ::toggleMod)
-        RegexPanel(cx, modsData, selection)
+    div(`class` = { "flex flex-col h-screen font-sans text-gray-800" }) {
+        div(`class` = { "flex px-3 py-2 border-b border-gray-300 sticky" }) {
+            Header(cx, setRegexType = {regexType.set(it)})
+        }
+        div(`class` = { "flex grow" }) {
+            ItemTypePanel({ modsData() }, viewedItemType, selection, regexType)
+            ModPanel(cx, { modsData() }, viewedItemType, selection, ::toggleMod, regexType)
+            RegexPanel(cx, { modsData() }, selection,regexType)
+        }
     }
 }
 
-// ── left panel: item type list ────────────────────────────────────────────────
+private fun DivContent.Header(cx: Context,setRegexType: (RegexType)->Unit) {
+    val regexTypes = cx.createSignal(REGEX_TYPE_CONFIGURATIONS)
+
+    span(`class` = { "text-2xl" }) {
+        +"POE Regex Calculator"
+    }
+    div(`class` = { "grow" }) {}//placeholder
+    div(`class` = {"text-sm flex gap-2 item-center"}) {
+        +"Regex Typ"
+        Dropdown(
+            cx,
+            onSelect = { setRegexType(it) },
+            options = regexTypes
+        ) {
+            +{ it.name }
+        }
+    }
+}
+
+private fun <T> DivContent.Dropdown(
+    cx: Context,
+    onSelect: (T) -> Unit,
+    options: ListSignal<T>,
+    allowNull:Boolean = false,
+    body: DivContent.(T) -> Unit,
+) {
+    val selected = cx.createNullSignal<T>()
+    val open = cx.createSignal(false)
+    fun select(value: T) {
+        selected.set(value)
+        open.set(false)
+        onSelect(value)
+    }
+    cx.createEffect {
+        if(!allowNull && selected() == null && !options.isNotEmpty())
+            select(options.first())
+    }
+    div(`class` = { "relative min-w-36" }) {
+        div(`class`={"p-2 py-1 border border-gray-200 ${if (!open()) "rounded" else "rounded-t"}"}, onClick = { open.update { !it } }) {
+            If({ selected() == null }) {
+                +"Auswählen"
+            }.Else {
+                body(selected()!!)
+            }
+        }
+        If({ open() }) {
+            div(`class` = {"absolute border-b border-gray-200 bg-white border-x border-b rounded-b min-w-36"}) {
+                For(options) { option ->
+                    div(
+                        `class` = { "p-2 py-1 ${if (selected() === option) "bg-blue-200" else "hover:bg-gray-200"}" },
+                        onClick = { select(option) }
+                    ) {
+                        body(option)
+                    }
+                }
+            }
+        }
+    }
+}
+
+data class DropdownOption<T>(val value: T, val body: DivBody)
 
 private fun DivContent.ItemTypePanel(
-    modsData: ModsData,
+    modsData: ()->ModsData,
     viewedItemType: Signal<String?>,
     selection: MapSignal<String, List<String>>,
-) = component {
-    div(`class` = { "w-56 border-r border-gray-200 overflow-y-auto flex-shrink-0 flex flex-col" }) {
-        div(`class` = { "px-3 py-2 border-b border-gray-200" }) {
-            span(`class` = { "font-semibold text-sm" }) { +"Item Types" }
+    regexType: Supplier<RegexType?>
+) {
+    val elements = {
+        when(regexType.get()?.modBasis) {
+            null -> emptyList()
+            ITEM_CLASS -> modsData().itemClasses.keys.sorted()
+            RegexType.SelectionBasis.BASE_TYPE -> modsData().itemClasses.values.flatten().map { it.name }.sorted()
         }
-        For(elements = { modsData.itemClasses.keys.sorted() }) { itemType ->
-            ItemTypeCard(itemType, selection, selected = { viewedItemType() == itemType }, select = {
-                viewedItemType(itemType)
-            })
+    }
+    component {
+        div(`class` = { "w-56 border-r border-gray-200 overflow-y-auto flex-shrink-0 flex flex-col" }) {
+            div(`class` = { "px-3 py-2 border-b border-gray-200" }) {
+                span(`class` = { "font-semibold text-sm" }) { +"Item Types" }
+            }
+            For(elements = elements) { itemType ->
+                ItemTypeCard(itemType, selection, selected = { viewedItemType() == itemType }, select = {
+                    viewedItemType(itemType)
+                })
+            }
         }
     }
 }
@@ -103,12 +181,12 @@ private fun DivContent.ItemTypeCard(
 
 private fun DivContent.ModPanel(
     cx: Context,
-    modsData: ModsData,
+    modsData: ()->ModsData,
     viewedItemType: Signal<String?>,
     selection: MapSignal<String, List<String>>,
     toggleMod: (String, String) -> Unit,
+    regexType: Supplier<RegexType>
 ) = component {
-    val expandedGroups = cx.createSetSignal<String>()
     div(`class` = { "flex-1 overflow-y-auto" }) {
         // Outer component: re-renders when viewedItemType changes.
         // Contains the search bar (re-inserted → autoFocus) and a nested component for the list.
@@ -117,17 +195,18 @@ private fun DivContent.ModPanel(
                 +"Select an item type on the left"
             }
         }.Else {
-            ModGroupView(cx, { viewedItemType()!! }, modsData, selection, toggleMod)
+            ModGroupView(cx, { viewedItemType()!! }, modsData, selection, toggleMod, regexType)
         }
     }
 }
 
 private fun DivContent.ModGroupView(
     cx: Context,
-    viewedItemType: ()->String,
-    modsData: ModsData,
+    viewedItemType: () -> String,
+    modsData: ()->ModsData,
     selection: MapSignal<String, List<String>>,
-    toggleMod: (String, String) -> Unit
+    toggleMod: (String, String) -> Unit,
+    regexType: Supplier<RegexType>
 ) = component {
     val searchQuery = cx.createSignal("")
     val query = { searchQuery().trim().lowercase() }
@@ -144,21 +223,25 @@ private fun DivContent.ModGroupView(
 
     // Inner component: re-renders when searchQuery changes (not the input above).
     div(`class` = { "p-4" }) {
-        ModGroupList(cx, { viewedItemType() }, modsData, query, selection, toggleMod)
+        ModGroupList(cx, { viewedItemType() }, modsData, query, selection, toggleMod, regexType)
     }
 }
 
 private fun DivContent.ModGroupList(
     cx: Context,
     viewedItemType: () -> String,
-    modsData: ModsData,
+    modsData:()-> ModsData,
     query: () -> String,
     selection: MapSignal<String, List<String>>,
-    toggleMod: (String, String) -> Unit
+    toggleMod: (String, String) -> Unit,
+    regexType: Supplier<RegexType>
 ) = component {
     val allGroups = cx.createMemo {
-        modsData.mods.values
-            .filter { mod -> mod.itemTypes.any { it.id == viewedItemType() } }
+        modsData().mods.values
+            .filter { mod ->
+                if(regexType.get().modBasis == RegexType.SelectionBasis.ITEM_CLASS) mod.itemTypes.any { it.id == viewedItemType() }
+                else mod.itemBases.any { it.id == viewedItemType() }
+            }
             .groupBy { it.groups.firstOrNull() ?: "(other)" }
     }
     val filteredGroups = allGroups.map {
@@ -172,10 +255,9 @@ private fun DivContent.ModGroupList(
                 it.name.lowercase().contains(query) ||
                         it.text.lowercase().contains(query)
             }
-        }
-            .sortedBy { it.key }
+        }.sortedBy { it.key }
     }
-    If (condition = { filteredGroups().isEmpty() }) {
+    If(condition = { filteredGroups().isEmpty() }) {
         div(`class` = { "text-gray-400 text-sm text-center mt-8" }) {
             +{ "No groups match \"${query()}\"" }
         }
@@ -233,11 +315,11 @@ private fun DivContent.ModGroup(
                 div(`class` = { "px-3 py-1 flex items-center justify-between bg-gray-50" }) {
                     SelectAllModsHeader(selection, viewedItemType, allGroupModNames)
                 }
-                For({groupMods.sortedBy { it.name }}) { mod ->
+                For({ groupMods.sortedBy { it.name } }) { mod ->
                     ModRow(
                         mod = mod,
-                        selected ={mod.id in selection.getOrDefault(viewedItemType(), emptyList())},
-                        onSelect ={toggleMod(viewedItemType(), mod.id)}
+                        selected = { mod.id in selection.getOrDefault(viewedItemType(), emptyList()) },
+                        onSelect = { toggleMod(viewedItemType(), mod.id) }
                     )
                 }
             }
@@ -280,8 +362,8 @@ private fun DivContent.SelectAllModsHeader(
 
 private fun DivContent.ModRow(
     mod: ModEntry,
-    selected: ()->Boolean,
-    onSelect: ()-> Unit
+    selected: () -> Boolean,
+    onSelect: () -> Unit
 ) = component {
     div(
         `class` = {
@@ -299,8 +381,9 @@ private fun DivContent.ModRow(
 
 private fun DivContent.RegexPanel(
     cx: Context,
-    modsData: ModsData,
+    modsData: () -> ModsData,
     selection: MapSignal<String, List<String>>,
+    regexType: Supplier<RegexType>,
 ) {
     div(`class` = { "w-96 border-l border-gray-200 flex-shrink-0 flex flex-col" }) {
         div(`class` = { "px-4 py-2 border-b border-gray-200 flex items-center justify-between" }) {
@@ -313,46 +396,53 @@ private fun DivContent.RegexPanel(
             ) { +"Clear" }
         }
         div(`class` = { "p-4 flex-1 overflow-y-auto" }) {
-            ResultDisplay(cx,selection, modsData)
+            ResultDisplay(cx, selection, modsData, regexType)
         }
     }
 }
 
 private sealed interface RegexResult {
-    data class Regex(var regex: String): RegexResult
-    data class Conflict(val element: Searchable, val conflicts: List<Searchable>): RegexResult
+    data class Regex(var regex: String) : RegexResult
+    data class Conflict(val element: Searchable, val conflicts: List<Searchable>) : RegexResult
 }
 
 private fun DivContent.ResultDisplay(
     cx: Context,
     selection: MapSignal<String, List<String>>,
-    modsData: ModsData
+    modsData: ()->ModsData,
+    regexType: Supplier<RegexType>
 ) = component {
-    val activeSel = selection.keySetSignal().map { selection[it]?:listOf() }
+    val activeSel = selection.keySetSignal().map { selection[it] ?: listOf() }
     val regex = cx.createNullSignal<RegexResult>()
     val lastRegexTime = cx.createSignal(Duration.ZERO)
     val candidatesProgress = cx.createSignal(0f)
     val reductionProgress = cx.createSignal(0f)
     cx.createEffect {
         val mods = selection.filter { (k, v) -> v.isNotEmpty() }
-        if(mods.isEmpty()) return@createEffect
+        if (mods.isEmpty()) return@createEffect
+        val modData = modsData().copy()
+        val filterByClass = regexType.get().modBasis == RegexType.SelectionBasis.ITEM_CLASS
         val thread = Thread.startVirtualThread {
             regex.set(null)
             candidatesProgress.set(0f)
             reductionProgress.set(0f)
             lastRegexTime.set(measureTime {
                 try {
-                    regex.set(RegexResult.Regex(buildVendorRegex(
-                        modsData, mods,
-                        candidatesProgressCallback = { progress, total ->
-                            candidatesProgress.set(progress.toFloat() / total.coerceAtLeast(1))
-                        },
-                        reductionProgressCallback = { progress, total ->
-                            reductionProgress.set(progress.toFloat() / total.coerceAtLeast(1))
-                        },
-                    ).also {
-                        println("Regex calculated:$it")
-                    }))
+                    regex.set(
+                        RegexResult.Regex(
+                            buildVendorRegex(
+                                modData, mods,
+                                filterByClass = filterByClass,
+                                candidatesProgressCallback = { progress, total ->
+                                    candidatesProgress.set(progress.toFloat() / total.coerceAtLeast(1))
+                                },
+                                reductionProgressCallback = { progress, total ->
+                                    reductionProgress.set(progress.toFloat() / total.coerceAtLeast(1))
+                                },
+                            ).also {
+                                println("Regex calculated:$it")
+                            })
+                    )
                 } catch (e: UnresolvablePatternException) {
                     regex.set(RegexResult.Conflict(e.element, e.collisions))
                 }
@@ -364,11 +454,11 @@ private fun DivContent.ResultDisplay(
         }
     }
 
-    If ({ activeSel.any { it.isNotEmpty() } }) {
-        If({regex() == null}) {
+    If({ activeSel.any { it.isNotEmpty() } }) {
+        If({ regex() == null }) {
             CalculatingDisplay({ candidatesProgress() }, { reductionProgress() })
         }.Else {
-            If({regex() is RegexResult.Regex}) {
+            If({ regex() is RegexResult.Regex }) {
                 RegexDisplay({ regex()!! as RegexResult.Regex }, { lastRegexTime() })
             }.Else {
                 ConflictDisplay({ regex()!! as RegexResult.Conflict }, { lastRegexTime() }, selection)
@@ -398,15 +488,16 @@ private fun DivContent.ProgressBar(label: String, progress: () -> Float) {
             span { +{ "${percentage()}%" } }
         }
         div(`class` = { "w-full bg-gray-100 rounded-full h-2" }) {
-            div(`class` = { "bg-blue-400 h-2 rounded-full transition-all" },
+            div(
+                `class` = { "bg-blue-400 h-2 rounded-full transition-all" },
                 style = { "width: ${percentage()}%" }) {}
         }
     }
 }
 
 private fun DivContent.RegexDisplay(
-    regex: ()->RegexResult.Regex,
-    lastRegexTime: ()->Duration
+    regex: () -> RegexResult.Regex,
+    lastRegexTime: () -> Duration
 ) {
     pre(`class` = { "text-xs bg-gray-50 p-3 rounded border border-gray-200 whitespace-pre-wrap break-all font-mono leading-relaxed" }) {
         +{ regex().regex }
@@ -415,11 +506,17 @@ private fun DivContent.RegexDisplay(
         +"Regex Calculation time: "
         span(`class` = { "text-gray-400" }) { +{ lastRegexTime().toString() } }
     }
+    br()
+    span(`class` = { "text-xs text-gray-300" }) {
+        +"Size: "
+        span(`class` = { if(regex().regex.length<=250) "text-green-300" else "text-red-300" }) { +{ regex().regex.length.toString() } }
+        span(`class` = { "text-gray-400" }) {+"/250"}
+    }
 }
 
 private fun DivContent.ConflictDisplay(
-    conflict: ()->RegexResult.Conflict,
-    lastRegexTime: ()->Duration,
+    conflict: () -> RegexResult.Conflict,
+    lastRegexTime: () -> Duration,
     selection: MapSignal<String, List<String>>,
 ) = component {
 
@@ -452,26 +549,28 @@ private fun DivContent.ConflictDisplay(
             For({ conflict().conflicts }) { conflict ->
                 when (conflict) {
                     is ModPattern -> {
-                        For({conflict.mod.itemTypes.filter { selection[it.id]?.isNotEmpty()?:false }}) { item ->
+                        For({ conflict.mod.itemTypes.filter { selection[it.id]?.isNotEmpty() ?: false } }) { item ->
                             val mod = conflict.mod
                             div(
                                 `class` = { "flex flex-row cursor-pointer text-sm rounded-md border bg-red-50 border-red-200 text-red-700 hover:bg-red-100" },
-                                onClick = {addConflictingMod(mod)},
+                                onClick = { addConflictingMod(mod) },
                             ) {
-                                div(`class` ={"border-r py-1 px-2 bg-orange-50 hover:bg-red-50 rounded-l-md"}) {
+                                div(`class` = { "border-r py-1 px-2 bg-orange-50 hover:bg-red-50 rounded-l-md" }) {
                                     +item.name
                                 }
-                                div(`class` ={"py-1 px-2"}) {
+                                div(`class` = { "py-1 px-2" }) {
                                     +{ "${mod.name}  — ${mod.text}" }
                                 }
                             }
                         }
                     }
+
                     is ItemPattern -> {
                         div(`class` = { "px-2 py-1 text-xs rounded border bg-gray-50 border-gray-200 text-gray-500" }) {
                             +{ conflict.searchString }
                         }
                     }
+
                     else -> {
                         div(`class` = { "px-2 py-1 text-xs text-gray-400" }) {
                             +{ conflict.searchString }

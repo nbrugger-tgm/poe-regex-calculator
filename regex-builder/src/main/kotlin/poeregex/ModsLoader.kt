@@ -9,13 +9,13 @@ import kotlin.io.path.readText
 // ── raw JSON types (internal) ─────────────────────────────────────────────────
 
 @Serializable
-private data class RawSpawnWeight(
+data class RawSpawnWeight(
     val tag: String,
     val weight: Int,
 )
 
 @Serializable
-private data class RawMod(
+data class RawMod(
     val name: String,
     val text: String? = null,
     val groups: List<String> = emptyList(),
@@ -35,28 +35,8 @@ data class RawBaseItem(
     val tags: List<String> = emptyList(),
 )
 
-// ── text cleaning ─────────────────────────────────────────────────────────────
-
-private val WEAPON_CLASSES = setOf(
-    "Bow", "Claw", "Crossbow", "Dagger", "Flail",
-    "One Hand Axe", "One Hand Mace", "One Hand Sword",
-    "Sceptre", "Spear", "Staff",
-    "Two Hand Axe", "Two Hand Mace", "Two Hand Sword",
-    "Wand", "Warstaff", "Talisman"
-)
-
-private val ARMOUR_CLASSES = setOf(
-    "Body Armour", "Boots", "Buckler", "Focus",
-    "Gloves", "Helmet", "Shield",
-)
-
-private val JEWELLERY_CLASSES = setOf("Amulet", "Belt", "Ring")
-
-private val RELEVANT_ITEM_CLASSES = WEAPON_CLASSES + ARMOUR_CLASSES + JEWELLERY_CLASSES
-
 private val EXCLUDED_BASES = setOf("Ring")
 
-private val MAXIMUM_LEVEL = 64
 
 private val MARKUP_RE = Regex("""\[(\w*)(\|([\w ]*))?\]""")
 
@@ -69,47 +49,40 @@ internal fun cleanText(raw: String): String = MARKUP_RE.replace(raw) {
 
 private val json = Json { ignoreUnknownKeys = true }
 
-/**
- * Parses raw JSON strings and builds [ModsData].
- * Exposed as `internal` so tests can call it directly without touching the file system.
- */
-internal fun buildModsData(modsJson: String, baseItemsJson: String): ModsData {
-    val rawMods = json.decodeFromString<Map<String, RawMod>>(modsJson)
-    val rawBaseItems = json.decodeFromString<Map<String, RawBaseItem>>(baseItemsJson)
+fun GameData.filter(
+    itemFilter: (RawBaseItem) -> Boolean,
+    modFilter: (RawMod) -> Boolean
+): ModsData {
+    val relevantItemBases = items.values
+        .filter { itemFilter(it) }
+        .filter { it.name !in EXCLUDED_BASES }
+        .filter { it.releaseState == "released" }
 
     // Build tag → set<item_class> from base_items
-    val tagToClasses: Map<String, MutableSet<String>> = buildMap {
-        for (item in rawBaseItems.values) {
-            for (tag in item.tags) {
-                getOrPut(tag) { mutableSetOf() }.also {
-                    it.add(item.itemClass)
-                }
-            }
-        }
-    }
-    val classesToBases = rawBaseItems.values
-        .filter { it.itemClass in RELEVANT_ITEM_CLASSES }
-        .filter { it.name !in EXCLUDED_BASES }
-        .filter { it.dropLevel <= MAXIMUM_LEVEL }
-        .filter { it.releaseState == "released" }
-        .groupBy { it.itemClass }
 
+    val (tagToClasses, tagToBases) = buildTaggingMaps(relevantItemBases)
+
+    val relevantItemClasses = relevantItemBases.map { it.itemClass }.distinct()
 
     // Filter and convert mods
-    val mods: Map<String, ModEntry> = rawMods
+    val mods: Map<String, ModEntry> = this.mods
         .asSequence()
         .filter { (id, mod) ->
-            mod.domain == "item" &&
-                    mod.generationType != "unique" &&
-                    mod.name.isNotEmpty() &&
-                    mod.requiredLevel <= MAXIMUM_LEVEL &&
-                    !mod.essenceMod
+            modFilter(mod)
         }
         .map { (id, raw) ->
             val resolvedItemTypes = raw.spawnWeights.asSequence()
                 .filter { it.weight > 0 }
                 .flatMap { tagToClasses[it.tag] ?: emptySet() }
-                .filter { it in RELEVANT_ITEM_CLASSES }
+                .filter { it in relevantItemClasses }
+                .distinct()
+                .sorted()
+                .map { cls -> ItemTypeRef(id = cls, name = cls) }
+                .toList()
+            val resolvedBaseTypes = raw.spawnWeights.asSequence()
+                .filter { it.weight > 0 }
+                .flatMap { tagToBases[it.tag] ?: emptySet() }
+                .filter { base -> relevantItemBases.any { it.name == base} }
                 .distinct()
                 .sorted()
                 .map { cls -> ItemTypeRef(id = cls, name = cls) }
@@ -121,6 +94,7 @@ internal fun buildModsData(modsJson: String, baseItemsJson: String): ModsData {
                 text = raw.text?.let(::cleanText) ?: "",
                 groups = raw.groups,
                 itemTypes = resolvedItemTypes,
+                itemBases = resolvedBaseTypes
             )
         }
         .filter { it.itemTypes.isNotEmpty() }
@@ -140,15 +114,38 @@ internal fun buildModsData(modsJson: String, baseItemsJson: String): ModsData {
     return ModsData(
         mods = mods,
         groups = groups,
-        itemClasses = classesToBases
+        itemClasses = relevantItemBases.groupBy { it.itemClass }
     )
 }
 
+private fun buildTaggingMaps(relevantItemBases: List<RawBaseItem>): Pair<Map<String, Set<String>>, Map<String, Set<String>>> {
+    val classes = mutableMapOf<String, MutableSet<String>>()
+    val bases = mutableMapOf<String, MutableSet<String>>()
+    for (item in relevantItemBases) {
+        for (tag in item.tags) {
+//            if (tag == "default") continue
+            classes.getOrPut(tag) { mutableSetOf() }.also {
+                it.add(item.itemClass)
+            }
+            bases.getOrPut(tag) { mutableSetOf() }.also {
+                it.add(item.name)
+            }
+        }
+    }
+    return classes to bases
+}
+
+data class GameData(
+    val mods: Map<String, RawMod>,
+    val items: Map<String, RawBaseItem>
+)
+
 /**
- * Ensures both data files exist under [projectDir] (downloading if absent),
- * parses them, and returns a fully indexed [ModsData].
+ * Ensures both data files exist under [projectDir] (downloading if absent) and parses them.
  */
-fun loadModsData(projectDir: Path): ModsData {
+fun loadGameData(projectDir: Path): GameData {
     val (modsFile, baseItemsFile) = ensureDataFiles(projectDir)
-    return buildModsData(modsFile.readText(), baseItemsFile.readText())
+    val rawMods = json.decodeFromString<Map<String, RawMod>>(modsFile.readText())
+    val rawBaseItems = json.decodeFromString<Map<String, RawBaseItem>>(baseItemsFile.readText())
+    return GameData(rawMods, rawBaseItems)
 }
